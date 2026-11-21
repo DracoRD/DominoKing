@@ -285,7 +285,7 @@ app.post('/api/wallet/checkout', requireAuth, async (req: AuthRequest, res) => {
       .toString('hex')
       .toUpperCase()}`;
 
-    if (selectedGateway === 'stripe' && process.env.STRIPE_SECRET_KEY) {
+    if (selectedGateway === 'stripe' && process.env.STRIPE_SECRET_KEY?.startsWith('sk_')) {
       try {
         const stripeRes = await fetch('https://api.stripe.com/v1/payment_intents', {
           method: 'POST',
