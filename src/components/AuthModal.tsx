@@ -33,7 +33,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, displayName }),
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          displayName: displayName.trim(),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -152,6 +156,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <input
                 type="password"
                 required
+                minLength={4}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••"

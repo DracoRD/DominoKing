@@ -4,8 +4,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import express from 'express';
 import dotenv from 'dotenv';
-import { eq } from 'drizzle-orm';
-import { db } from './src/db/index.ts';
+import { eq, sql } from 'drizzle-orm';
+import { db, isDatabaseConfigured } from './src/db/index.ts';
 import { coinPackages, users } from './src/db/schema.ts';
 import {
   authenticateLocalUser,
@@ -71,25 +71,84 @@ function sanitizeUser(u: DbUser) {
   };
 }
 
+function extractDbErrorCode(error: unknown): string {
+  const err = error as { code?: string; cause?: { code?: string; message?: string }; message?: string };
+  return String(err?.cause?.code || err?.code || '');
+}
+
+function isDbConnectionError(error: unknown): boolean {
+  const code = extractDbErrorCode(error);
+  const msg = String(
+    (error as { cause?: { message?: string }; message?: string })?.cause?.message ||
+      (error as { message?: string })?.message ||
+      ''
+  ).toLowerCase();
+  return (
+    ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNRESET', '28P01', '28000', '3D000', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(code) ||
+    msg.includes('econnrefused') ||
+    msg.includes('ssl') ||
+    msg.includes('password authentication failed') ||
+    msg.includes('no pg_hba.conf entry')
+  );
+}
+
 // Health check for Cloud Run and OnRender
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'quisqueya-domino-3d', timestamp: Date.now() });
+app.get('/api/health', async (_req, res) => {
+  if (!isDatabaseConfigured()) {
+    return res.json({
+      status: 'ok',
+      service: 'quisqueya-domino-3d',
+      database: 'not_configured',
+      timestamp: Date.now(),
+    });
+  }
+  try {
+    await db.execute(sql`SELECT 1`);
+    return res.json({
+      status: 'ok',
+      service: 'quisqueya-domino-3d',
+      database: 'connected',
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    return res.json({
+      status: 'ok',
+      service: 'quisqueya-domino-3d',
+      database: 'error',
+      dbCode: extractDbErrorCode(err) || 'UNKNOWN',
+      timestamp: Date.now(),
+    });
+  }
 });
 
 // Auth endpoints
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, password, displayName } = req.body || {};
-    if (!email || !password || String(password).length < 4) {
-      return res.status(400).json({ error: 'Correo y contraseña (mínimo 4 caracteres) requeridos' });
+    const cleanEmail = String(email || '').trim();
+    if (!cleanEmail || !cleanEmail.includes('@') || !password || String(password).length < 4) {
+      return res.status(400).json({ error: 'Correo válido y contraseña (mínimo 4 caracteres) requeridos' });
     }
-    const user = await registerLocalUser(String(email), String(password), String(displayName || ''));
+    const user = await registerLocalUser(cleanEmail, String(password), String(displayName || ''));
     const token = signSessionToken({ uid: user.uid, email: user.email, role: user.role });
     res.status(201).json({ token, user: sanitizeUser(user) });
   } catch (error: unknown) {
-    if (error instanceof Error && error.message === 'EMAIL_EXISTS') {
-      return res.status(409).json({ error: 'Este correo ya está registrado' });
+    if (error instanceof Error) {
+      if (error.message === 'EMAIL_EXISTS') {
+        return res.status(409).json({ error: 'Este correo ya está registrado' });
+      }
+      if (error.message === 'DB_NOT_CONFIGURED') {
+        return res.status(503).json({
+          error: 'Base de datos no conectada: agrega PostgreSQL (DATABASE_URL) en Render.',
+        });
+      }
     }
+    if (isDbConnectionError(error)) {
+      return res.status(503).json({
+        error: 'Error de conexión con PostgreSQL. Verifica DATABASE_URL en Render.',
+      });
+    }
+    console.error('[POST /api/auth/register] Unexpected error:', error);
     res.status(500).json({ error: 'Error al registrar usuario' });
   }
 });
@@ -97,16 +156,28 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    if (!email || !password) {
+    const cleanEmail = String(email || '').trim();
+    if (!cleanEmail || !password) {
       return res.status(400).json({ error: 'Credenciales incompletas' });
     }
-    const user = await authenticateLocalUser(String(email), String(password));
+    const user = await authenticateLocalUser(cleanEmail, String(password));
     if (!user) {
       return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
     }
     const token = signSessionToken({ uid: user.uid, email: user.email, role: user.role });
     res.json({ token, user: sanitizeUser(user) });
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === 'DB_NOT_CONFIGURED') {
+      return res.status(503).json({
+        error: 'Base de datos no conectada: agrega PostgreSQL (DATABASE_URL) en Render.',
+      });
+    }
+    if (isDbConnectionError(error)) {
+      return res.status(503).json({
+        error: 'Error de conexión con PostgreSQL. Verifica DATABASE_URL en Render.',
+      });
+    }
+    console.error('[POST /api/auth/login] Unexpected error:', error);
     res.status(500).json({ error: 'Error al iniciar sesión' });
   }
 });

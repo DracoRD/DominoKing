@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
-import { db } from './index.ts';
+import { db, isDatabaseConfigured } from './index.ts';
 import {
   coinPackages,
   matches,
@@ -24,6 +24,9 @@ export type DbUser = typeof users.$inferSelect;
 let seededPromise: Promise<void> | null = null;
 
 export async function ensureInitialSeed(): Promise<void> {
+  if (!isDatabaseConfigured()) {
+    return;
+  }
   if (!seededPromise) {
     seededPromise = runInitialSeed().catch((err) => {
       seededPromise = null;
@@ -34,11 +37,12 @@ export async function ensureInitialSeed(): Promise<void> {
 }
 
 async function ensureDatabaseTables(): Promise<void> {
-  try {
-    await db.execute(sql`SELECT 1 FROM users LIMIT 1;`);
+  const check = await db.execute(
+    sql`SELECT to_regclass('public.users') AS u, to_regclass('public.transactions') AS t;`
+  );
+  const row = (check.rows?.[0] || {}) as { u?: string | null; t?: string | null };
+  if (row.u && row.t) {
     return;
-  } catch {
-    // Table does not exist yet on a fresh database (e.g., Render Postgres); create schema below.
   }
 
   await db.execute(sql`
@@ -318,6 +322,9 @@ export async function getOrCreateFirebaseUser(
   displayName?: string,
   avatarUrl?: string
 ): Promise<DbUser> {
+  if (!isDatabaseConfigured()) {
+    throw new Error('DB_NOT_CONFIGURED');
+  }
   try {
     await ensureInitialSeed();
     const isDesignatedAdmin = email.toLowerCase() === 'darlin@sistem.com';
@@ -350,6 +357,9 @@ export async function getOrCreateFirebaseUser(
 }
 
 export async function getUserByUid(uid: string): Promise<DbUser | null> {
+  if (!isDatabaseConfigured()) {
+    throw new Error('DB_NOT_CONFIGURED');
+  }
   try {
     await ensureInitialSeed();
     const rows = await db.select().from(users).where(eq(users.uid, uid)).limit(1);
@@ -365,49 +375,101 @@ export async function registerLocalUser(
   password: string,
   displayName: string
 ): Promise<DbUser> {
+  if (!isDatabaseConfigured()) {
+    throw new Error('DB_NOT_CONFIGURED');
+  }
   try {
     await ensureInitialSeed();
     const cleanEmail = email.trim();
-    const existing = await db
-      .select()
-      .from(users)
-      .where(sql`lower(${users.email}) = lower(${cleanEmail})`)
-      .limit(1);
-    if (existing.length > 0) {
-      throw new Error('EMAIL_EXISTS');
-    }
-
     const uid = `local_${crypto.randomUUID()}`;
     const isDesignatedAdmin = cleanEmail.toLowerCase() === 'darlin@sistem.com';
-    const inserted = await db
-      .insert(users)
-      .values({
-        uid,
+
+    return await db.transaction(async (tx) => {
+      const existing = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(sql`lower(${users.email}) = lower(${cleanEmail})`)
+        .limit(1);
+      if (existing.length > 0) {
+        throw new Error('EMAIL_EXISTS');
+      }
+
+      const inserted = await tx
+        .insert(users)
+        .values({
+          uid,
+          email: cleanEmail,
+          displayName: displayName.trim() || cleanEmail.split('@')[0],
+          passwordHash: hashPassword(password),
+          role: isDesignatedAdmin ? 'admin' : 'player',
+          coinBalance: 1000,
+        })
+        .returning();
+
+      const createdUser = inserted[0];
+
+      const prevTx = await tx
+        .select({ integrityHash: transactions.integrityHash })
+        .from(transactions)
+        .orderBy(desc(transactions.id))
+        .limit(1);
+      const previousHash = prevTx[0]?.integrityHash || 'GENESIS_QUISQUEYA_LEDGER';
+
+      const txReference = `QD-${Date.now().toString(36).toUpperCase()}-${crypto
+        .randomBytes(3)
+        .toString('hex')
+        .toUpperCase()}`;
+
+      const encryptedPayload = encryptTransactionPayload({
+        reason: 'welcome_bonus',
         email: cleanEmail,
-        displayName: displayName.trim() || cleanEmail.split('@')[0],
-        passwordHash: hashPassword(password),
-        role: isDesignatedAdmin ? 'admin' : 'player',
-        coinBalance: 1000,
-      })
-      .returning();
+        userId: createdUser.id,
+        uid: createdUser.uid,
+        timestamp: new Date().toISOString(),
+      });
 
-    await createEncryptedTransaction({
-      userId: inserted[0].id,
-      type: 'admin_grant',
-      coinsDelta: 1000,
-      fiatAmountCents: 0,
-      gateway: 'system',
-      description: 'Bono de bienvenida al club Quisqueya Dominó 3D',
-      sensitiveMeta: { reason: 'welcome_bonus', email: cleanEmail },
+      const integrityHash = computeTransactionIntegrityHash({
+        txReference,
+        userId: createdUser.id,
+        type: 'admin_grant',
+        coinsDelta: 1000,
+        balanceAfter: 1000,
+        fiatAmountCents: 0,
+        gateway: 'system',
+        encryptedPayload,
+        previousHash,
+      });
+
+      await tx.insert(transactions).values({
+        txReference,
+        userId: createdUser.id,
+        type: 'admin_grant',
+        coinsDelta: 1000,
+        balanceAfter: 1000,
+        fiatAmountCents: 0,
+        currency: 'USD',
+        gateway: 'system',
+        status: 'completed',
+        encryptedPayload,
+        integrityHash,
+        previousHash,
+        description: 'Bono de bienvenida al club Quisqueya Dominó',
+      });
+
+      return createdUser;
     });
-
-    return inserted[0];
   } catch (error: unknown) {
-    if (error instanceof Error && error.message === 'EMAIL_EXISTS') {
+    if (error instanceof Error && (error.message === 'EMAIL_EXISTS' || error.message === 'DB_NOT_CONFIGURED')) {
       throw error;
     }
+    const pgCode =
+      (error as { code?: string; cause?: { code?: string } })?.code ||
+      (error as { cause?: { code?: string } })?.cause?.code;
+    if (pgCode === '23505') {
+      throw new Error('EMAIL_EXISTS');
+    }
     console.error('Database query failed (registerLocalUser):', error);
-    throw new Error('Failed to register user account.', { cause: error });
+    throw new Error('DB_REGISTER_FAILED', { cause: error });
   }
 }
 
@@ -415,6 +477,9 @@ export async function authenticateLocalUser(
   email: string,
   password: string
 ): Promise<DbUser | null> {
+  if (!isDatabaseConfigured()) {
+    throw new Error('DB_NOT_CONFIGURED');
+  }
   try {
     await ensureInitialSeed();
     const cleanEmail = email.trim();
@@ -429,7 +494,7 @@ export async function authenticateLocalUser(
     return user;
   } catch (error) {
     console.error('Database query failed (authenticateLocalUser):', error);
-    throw new Error('Authentication query failed.', { cause: error });
+    throw new Error('DB_AUTH_FAILED', { cause: error });
   }
 }
 
