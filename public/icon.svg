@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0E281C" />
+      <stop offset="100%" stop-color="#07120D" />
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F6D365" />
+      <stop offset="100%" stop-color="#D49B27" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bg)" />
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="url(#gold)" stroke-width="8" opacity="0.6" />
+  <g transform="translate(156, 86)">
+    <rect x="0" y="0" width="200" height="340" rx="28" fill="#FAF6EC" stroke="#D49B27" stroke-width="6" />
+    <line x1="22" y1="170" x2="178" y2="170" stroke="#1E1A16" stroke-width="8" stroke-linecap="round" />
+    <circle cx="100" cy="170" r="10" fill="url(#gold)" />
+    <!-- Top 6 -->
+    <circle cx="55" cy="48" r="14" fill="#1E1A16" />
+    <circle cx="145" cy="48" r="14" fill="#1E1A16" />
+    <circle cx="55" cy="88" r="14" fill="#1E1A16" />
+    <circle cx="145" cy="88" r="14" fill="#1E1A16" />
+    <circle cx="55" cy="128" r="14" fill="#1E1A16" />
+    <circle cx="145" cy="128" r="14" fill="#1E1A16" />
+    <!-- Bottom 6 -->
+    <circle cx="55" cy="212" r="14" fill="#B91C1C" />
+    <circle cx="145" cy="212" r="14" fill="#B91C1C" />
+    <circle cx="55" cy="252" r="14" fill="#B91C1C" />
+    <circle cx="145" cy="252" r="14" fill="#B91C1C" />
+    <circle cx="55" cy="292" r="14" fill="#B91C1C" />
+    <circle cx="145" cy="292" r="14" fill="#B91C1C" />
+  </g>
+</svg>

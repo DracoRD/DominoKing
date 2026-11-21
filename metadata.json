@@ -1,0 +1,6 @@
+{
+  "name": "Quisqueya Dominó 3D",
+  "description": "Dominó Dominicano 3D en tiempo real con chat de voz y video, torneos semanales, estadísticas de pareja e individuales y pasarela de monedas encriptada.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
